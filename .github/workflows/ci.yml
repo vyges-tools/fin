@@ -1,0 +1,56 @@
+# Build & test on every push to main and on pull requests (plus manual dispatch).
+#
+# Not the plain std-only ci.yml the other engines use: vyges-fin writes the design database
+# through vyges-opendb, which statically links libodb (C++, built from source). So this needs
+# the same sibling layout and C toolchain as release.yml — see the comments there.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vyges-tools-fin
+    steps:
+      # Sibling layout so every `[patch]` path entry in Cargo.toml resolves. A patch whose path
+      # does not exist is a hard `failed to load source`, not a fall-back to the git source.
+      - uses: actions/checkout@v4
+        with:
+          path: vyges-tools-fin
+      - uses: actions/checkout@v4
+        with:
+          repository: vyges-tools/opendb
+          path: vyges-tools-opendb
+      - uses: actions/checkout@v4
+        with:
+          repository: vyges-tools/opendb-lib
+          path: vyges-tools-opendb-lib
+      - uses: actions/checkout@v4
+        with:
+          repository: vyges-tools/loom
+          path: vyges-tools-loom
+
+      - name: Toolchain
+        # Boost (headers) + zlib only; fmt/spdlog/abseil are built from source by libodb's build.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ git bison libboost-dev libboost-iostreams-dev libbz2-dev zlib1g-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # No --locked: Cargo.lock is gitignored here (as in opendb), and the [patch] resolves the
+      # opendb crates to the freshly-checked-out siblings — let Cargo resolve.
+      - name: Build
+        run: cargo build --release --verbose
+      - name: Test
+        run: cargo test --release --verbose

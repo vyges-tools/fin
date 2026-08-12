@@ -1,0 +1,39 @@
+[package]
+name = "vyges-fin"
+version = "0.1.30"
+edition = "2021"
+description = "Density fill over the OpenDB database: metal fill shapes to meet per-layer density rules."
+license = "Apache-2.0"
+authors = ["Vyges <https://vyges.com/contact>"]
+homepage = "https://vyges.com"
+repository = "https://github.com/vyges-tools/fin"
+
+[dependencies]
+# The database is the substrate and the output: fin reads what already occupies each layer and
+# writes the fill shapes that go around it.
+# gen-write: the generated SETTERS (placement status, source type) are behind that feature.
+vyges-opendb = { git = "https://github.com/vyges-tools/opendb.git", branch = "main", features = ["gen-write"] }
+vyges-events = { git = "https://github.com/vyges-tools/events.git", branch = "main", default-features = false }
+# Rectilinear polygon sets (loom::poly90) — the row region's boundary is a union of row
+# rectangles clipped to the core, and its holes are the macros carved out of it.
+vyges-loom = { git = "https://github.com/vyges-tools/loom", branch = "main" }
+serde_json = "1"
+
+# Local development against the sibling checkouts. Patches are only honored from the root
+# manifest, so this is a no-op for downstream consumers pulling us by git.
+[patch."https://github.com/vyges-tools/opendb.git"]
+vyges-opendb = { path = "../vyges-tools-opendb" }
+
+[patch."https://github.com/vyges-tools/opendb-lib.git"]
+vyges-opendb-lib = { path = "../vyges-tools-opendb-lib" }
+
+[patch."https://github.com/vyges-tools/loom"]
+vyges-loom = { path = "../vyges-tools-loom" }
+
+[[bin]]
+name = "vyges-fin"
+path = "src/main.rs"
+
+[lib]
+name = "vyges_fin"
+path = "src/lib.rs"
