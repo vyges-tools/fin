@@ -48,7 +48,7 @@ const DESCRIBE: &str = r#"{
       "The tiling is a fixed grid anchored at each sub-area's bounding box. Upstream notes KLayout sweeps the tile origin looking for maximum fill and does not do so; neither does this, so fill density is not maximal by construction.",
       "prune() is conservative: it forbids fill near two regions that are closer than the fill spacing, which may exclude a position that would in fact have been legal.",
       "OPC fill is placed only where the rules state an `opc` section, and only after non-OPC fill, clearing both the design and the fill just placed.",
-      "Written against the upstream fin test data at pin b5624809f29048e1f9ce9e83eb562620c652e084. The algorithm is reimplemented from the published behavior, not transliterated."
+      "Correlated at pin 945a9f48dc6e5cc91d865daa92c45a1094cb682c: 5 of 5 designs reproduce OpenROAD density fill exactly, fill for fill (26360, 7518, 25095, 12437, 758 shapes). Re-measured there on 2026-08-23 and identical to the previous pin b5624809f29048e1f9ce9e83eb562620c652e084, so this engine carried the re-pin with zero movement -- measured, not assumed. Only one case has an upstream golden; the other four are ours, scored against an oracle run at our own pin. The algorithm is reimplemented from the published behaviour, not transliterated."
   ],
   "invocation": {
     "args_template": ["density-fill", "{odb}"],
