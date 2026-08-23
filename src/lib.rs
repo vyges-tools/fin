@@ -270,6 +270,45 @@ fn point_in_outline(outline: &[vyges_loom::poly90::Point], x: i32, y: i32) -> bo
 ///
 /// `mask_counter` runs across the whole layer, so the mask a shape gets depends on how many were
 /// placed before it anywhere on that layer.
+/// The verdict word for a run that placed `fills` shapes.
+///
+/// 🔑 **A pass word asserts that work was DONE; if none was, do not say it.** `filled` is what the
+/// descriptor's assertion reads (`status == "filled"`), so a run that placed no shape at all would
+/// otherwise pass a gate having changed nothing. Measured before this existed: a degenerate
+/// `--area` returned `filled` with `fills: 0`, `layers_filled: 0` and exit 0, while the engine's
+/// own event said *"density fill applied: 0 shape(s) over 0 layer(s)"*.
+///
+/// ⚠️ **`vacuous` is not an error.** Zero can be the right answer — a design already above every
+/// density floor needs no fill. The caller reads the count and decides; what it must not do is
+/// read a no-op as a completed transformation. A dry run keeps `planned`, which never claimed to
+/// have filled anything and already fails the assertion.
+pub fn settle_status(dry_run: bool, fills: usize) -> &'static str {
+    if dry_run {
+        return "planned";
+    }
+    if fills == 0 {
+        return "vacuous";
+    }
+    "filled"
+}
+
+#[cfg(test)]
+mod settle_status_tests {
+    use super::settle_status;
+
+    #[test]
+    fn a_run_that_filled_nothing_is_not_reported_as_filled() {
+        assert_eq!(settle_status(false, 0), "vacuous");
+        assert_eq!(settle_status(false, 1), "filled");
+    }
+
+    #[test]
+    fn a_dry_run_never_claims_to_have_filled_anything() {
+        assert_eq!(settle_status(true, 0), "planned");
+        assert_eq!(settle_status(true, 5), "planned");
+    }
+}
+
 pub fn fill_area(
     area: &Poly90Set,
     is_horiz: bool,

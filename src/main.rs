@@ -28,6 +28,7 @@ OPTIONS:
 
 EXIT STATUS:
   0  filled      fill was placed and the database written
+  0  vacuous     the run placed nothing -- NOT a completed fill; read the count
   1  refused     the design cannot be filled as asked
   2  error       usage error, unreadable database or rules, no DBU scale, or a failed write
 ";
@@ -39,6 +40,7 @@ const DESCRIBE: &str = r#"{
   "maturity": "structured",
   "provenance_limitations": [
       "input_hash covers the argument vector, not the content of the .odb or the rules file it names.",
+      "status is one of filled, planned, vacuous or error. VACUOUS IS NOT FILLED: it means the run placed no shape at all, and the declared assertion passes only on filled, so a no-op fails it rather than reporting a fill that did not happen. Zero can still be the right answer -- a design already above every density floor needs no fill -- so read fills and layers_filled and decide. A dry run reports planned, which never claimed to have filled anything.",
       "Validated against OpenROAD density fill at a pinned commit across five designs covering a power grid, a macro, a non-rectangular core and a restricted --area: every fill shape matches in layer, mask, OPC flag and coordinates.",
       "Also checked against invariants that need no reference: every fill is a whole shape of a size the rules declare, and no two fills on a layer overlap. Those hold of any correct fill.",
       "Existing fill is CLEARED before filling: fill is regenerated wholesale, never patched, so re-running is idempotent rather than cumulative.",
@@ -294,7 +296,7 @@ fn density_fill(args: &[String]) -> ExitCode {
     let json = format!(
         "{{\n  \"tool\": \"vyges-fin\",\n  \"status\": \"{}\",\n  \"fills\": {},\n  \
          \"layers_filled\": {},\n  \"layers_skipped\": {},\n  \"odb_written\": {}\n}}",
-        if opts.dry_run { "planned" } else { "filled" },
+        vyges_fin::settle_status(opts.dry_run, planned.len()),
         planned.len(),
         planned
             .iter()
