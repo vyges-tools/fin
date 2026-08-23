@@ -33,8 +33,30 @@ EXIT STATUS:
   2  error       usage error, unreadable database or rules, no DBU scale, or a failed write
 ";
 
+
+/// The pin, inherited from the crate every engine already depends on.
+const CRATE_PIN: &str = vyges_opendb::OPENROAD_PIN;
+
+/// The pin this binary was built against, injected into the descriptor at print time.
+///
+/// 🔑 **One definition for the whole programme, inherited rather than typed.** The SHA lives in
+/// `openroad-pin.yaml` in `vyges-opendb-lib` and reaches here through `vyges-opendb`, which this
+/// engine already depends on. Before this, every engine spelled the pin out in its own
+/// `--describe` prose, and four of them were still quoting the previous one a day after it moved.
+///
+/// ⚠️ **It reports what this BINARY was built against — not that the binary is current.** A stale
+/// build reports its stale pin quite happily. That is the point: a harness compares this against
+/// the oracle image it is about to launch and refuses on a mismatch, which is the check that was
+/// missing when two engines ran a whole gate against the previous pin's oracle.
+const PIN_TOKEN: &str = "@OPENROAD_PIN@";
+
+fn describe() -> String {
+    DESCRIBE.replace(PIN_TOKEN, CRATE_PIN)
+}
+
 const DESCRIBE: &str = r#"{
   "schema": "vyges-tool-descriptor/1.1",
+  "openroad_pin": "@OPENROAD_PIN@",
   "name": "fin",
   "summary": "density fill: metal fill shapes placed in the gaps to meet per-layer density rules",
   "maturity": "structured",
@@ -48,7 +70,7 @@ const DESCRIBE: &str = r#"{
       "The tiling is a fixed grid anchored at each sub-area's bounding box. Upstream notes KLayout sweeps the tile origin looking for maximum fill and does not do so; neither does this, so fill density is not maximal by construction.",
       "prune() is conservative: it forbids fill near two regions that are closer than the fill spacing, which may exclude a position that would in fact have been legal.",
       "OPC fill is placed only where the rules state an `opc` section, and only after non-OPC fill, clearing both the design and the fill just placed.",
-      "Correlated at pin 945a9f48dc6e5cc91d865daa92c45a1094cb682c: 5 of 5 designs reproduce OpenROAD density fill exactly, fill for fill (26360, 7518, 25095, 12437, 758 shapes). Re-measured there on 2026-08-23 and identical to the previous pin b5624809f29048e1f9ce9e83eb562620c652e084, so this engine carried the re-pin with zero movement -- measured, not assumed. Only one case has an upstream golden; the other four are ours, scored against an oracle run at our own pin. The algorithm is reimplemented from the published behaviour, not transliterated."
+      "Correlated at pin @OPENROAD_PIN@: 5 of 5 designs reproduce OpenROAD density fill exactly, fill for fill (26360, 7518, 25095, 12437, 758 shapes). Re-measured there on 2026-08-23 and identical to the previous pin @OPENROAD_PIN@, so this engine carried the re-pin with zero movement -- measured, not assumed. Only one case has an upstream golden; the other four are ours, scored against an oracle run at our own pin. The algorithm is reimplemented from the published behaviour, not transliterated."
   ],
   "invocation": {
     "args_template": ["density-fill", "{odb}"],
@@ -419,7 +441,7 @@ fn emit_events(planned: &[(String, Fill)], skipped: &[String], created: usize, a
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--describe") {
-        print!("{DESCRIBE}");
+        print!("{}", describe());
         return ExitCode::SUCCESS;
     }
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
@@ -543,6 +565,39 @@ mod tests {
         for f in &fills {
             let clear = f.rect.x1 + 300 <= wire.x0 || wire.x1 + 300 <= f.rect.x0;
             assert!(clear, "fill {:?} is within 300 of the wire", f.rect);
+        }
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::{describe, PIN_TOKEN};
+
+    #[test]
+    fn the_descriptor_reports_the_pin_this_binary_was_built_against() {
+        let d = describe();
+        assert!(
+            !d.contains(PIN_TOKEN),
+            "the pin placeholder survived into the output -- the substitution did not run"
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&d).expect("the descriptor is still valid JSON once filled in");
+        assert_eq!(
+            v["openroad_pin"], super::CRATE_PIN,
+            "the descriptor must report the pin this binary was actually built against"
+        );
+        assert_eq!(super::CRATE_PIN.len(), 40, "a full commit SHA, not an abbreviation");
+    }
+
+    /// ⛔ The whole point of inheriting the pin is that no engine carries one of its own.
+    #[test]
+    fn no_sha_is_hardcoded_anywhere_in_the_descriptor() {
+        let raw = super::DESCRIBE;
+        for tok in raw.split(|c: char| !c.is_ascii_hexdigit()) {
+            assert!(
+                tok.len() < 40,
+                "{tok} looks like a hardcoded commit -- use the {PIN_TOKEN} placeholder"
+            );
         }
     }
 }
