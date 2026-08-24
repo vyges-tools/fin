@@ -4,7 +4,7 @@ Density fill over the OpenDB design database: metal shapes placed in the gaps be
 so each layer meets the foundry's minimum metal density.
 
 ```text
-vyges loom fin density-fill design.odb --rules fill.json
+vyges physical fin density-fill design.odb --rules fill.json
 ```
 
 ## Correctness

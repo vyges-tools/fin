@@ -8,13 +8,20 @@ use vyges_fin::{fill_area, parse_rules, Fill, LayerCfg};
 use vyges_loom::poly90::{Poly90Set, Rect};
 use vyges_opendb::Db;
 
+// ⚠️ The prefix here is the CLI GROUP this engine belongs to, and vyges-cli's MODULES
+// registry is what actually decides it (`group: "physical"`). It read `vyges loom fin`
+// for a release after the construction engines were split out of the loom suite, because
+// nothing ties this string to that registry -- `vyges loom fin` is now REFUSED by the CLI,
+// so the help was telling users a command that no longer runs. If the group ever moves,
+// this string moves with it. Running the binary directly as `vyges-fin` always works and
+// is group-independent.
 const USAGE: &str = "\
-vyges loom fin — density fill: metal shapes in the gaps, to meet per-layer density rules
+vyges physical fin — density fill: metal shapes in the gaps, to meet per-layer density rules
 
 USAGE:
-  vyges loom fin density-fill <design.odb> --rules FILE [--area 'lx ly ux uy']
-  vyges loom fin --describe
-  vyges loom fin --help
+  vyges physical fin density-fill <design.odb> --rules FILE [--area 'lx ly ux uy']
+  vyges physical fin --describe
+  vyges physical fin --help
 
 OPTIONS:
   --rules FILE     JSON fill rules, per layer (required)
