@@ -19,6 +19,12 @@
 //! spacing is respected, every shape is whole and a declared size — rather than on reproducing a
 //! single reference file.
 
+/// This crate's version, as Cargo knows it — the single number the whole suite is released on.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The copyright line `--version` prints.
+pub const COPYRIGHT: &str = "© 2026 Vyges. All Rights Reserved.  https://vyges.com";
+
 use std::collections::BTreeMap;
 
 use vyges_loom::poly90::{Poly90Set, Rect};
