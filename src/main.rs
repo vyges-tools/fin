@@ -4,7 +4,7 @@
 //! Exit status: 0 filled, 1 the design cannot be filled as asked, 2 usage/read/write error.
 
 use std::process::ExitCode;
-use vyges_fin::{fill_area, parse_rules, Fill, LayerCfg};
+use vyges_fin::{fill_area, parse_rules, prune, spacing, Fill, LayerCfg};
 use vyges_loom::poly90::{Poly90Set, Rect};
 use vyges_opendb::Db;
 
@@ -361,7 +361,14 @@ fn plan_layer(
 
     // F4: the area is the bounds minus the design, bloated by the fill-to-design spacing.
     let s = cfg.non_opc.space_to_non_fill;
-    let area = bounds.difference(&occupied.bloat(s, s, s, s));
+    // F5, at the LAYER level. Upstream's `fillLayer` prunes the whole fill area here, before it
+    // splits into polygons and before `fillPolygon` opens each one — so the composition is
+    // `prune(open(prune(area)))`, not `prune(open(area))`. Both prunes are load-bearing: the
+    // layer-level one separates regions the DESIGN left close together, the per-size one inside
+    // `fill_area` separates regions the shrink/bloat opening broke apart. Dropping this one placed
+    // fill a sub-spacing distance from a neighbouring region — see the test below.
+    let (sx, sy) = spacing(is_horiz, &cfg.non_opc);
+    let area = prune(&bounds.difference(&occupied.bloat(s, s, s, s)), sx, sy);
     let mut out = fill_area(
         &area,
         is_horiz,
@@ -376,9 +383,16 @@ fn plan_layer(
         let so = cfg.opc.space_to_non_fill;
         let placed = Poly90Set::from_rects(&out.iter().map(|f| f.rect).collect::<Vec<_>>());
         let sf = cfg.non_opc.space_to_fill;
-        let opc_area = bounds
-            .difference(&occupied.bloat(so, so, so, so))
-            .difference(&placed.bloat(sf, sf, sf, sf));
+        // The OPC pass gets the same layer-level prune, with the OPC spacing — upstream prunes
+        // `opc_fill_area` too, and that call is where `space_line_end` first has any effect.
+        let (osx, osy) = spacing(is_horiz, &cfg.opc);
+        let opc_area = prune(
+            &bounds
+                .difference(&occupied.bloat(so, so, so, so))
+                .difference(&placed.bloat(sf, sf, sf, sf)),
+            osx,
+            osy,
+        );
         out.extend(fill_area(
             &opc_area,
             is_horiz,
@@ -584,6 +598,43 @@ mod tests {
             let clear = f.rect.x1 + 300 <= wire.x0 || wire.x1 + 300 <= f.rect.x0;
             assert!(clear, "fill {:?} is within 300 of the wire", f.rect);
         }
+    }
+
+    #[test]
+    fn the_fill_area_is_pruned_before_it_is_split_into_polygons() {
+        // Upstream rule, `DensityFill::fillLayer`: after subtracting the bloated non-fill, it
+        // calls `prune(fill_area, layer, cfg.non_opc, ...)` BEFORE `fill_area.get(polygons)` and
+        // the per-polygon `fillPolygon`. `fillPolygon` prunes again per shape size, but that
+        // second prune only ever sees one polygon's own pieces -- it cannot separate two regions
+        // the DESIGN left close together.
+        //
+        // Witness, found by sweeping random geometry at the shipped spacings: two free regions
+        // whose corners are 100 apart across a `space_to_fill` of 300. Without the layer-level
+        // prune we tiled the upper region from its own bottom edge and put a fill 100 from the
+        // lower one; upstream carves both facing edges first and places nothing there.
+        let cfg = LayerCfg {
+            non_opc: vyges_fin::ShapeCfg {
+                shapes: vec![(500, 500), (300, 300)],
+                space_to_fill: 300,
+                space_to_non_fill: 0,
+                space_line_end: 0,
+            },
+            ..Default::default()
+        };
+        let bounds = Poly90Set::from_rects(&[Rect::new(2000, 1200, 2800, 2000)]);
+        let free = Poly90Set::from_rects(&[
+            Rect::new(2000, 1200, 2200, 1500),
+            Rect::new(2200, 1600, 2800, 2000),
+        ]);
+        // `space_to_non_fill` is 0, so the fill area is exactly `free`.
+        let occupied = bounds.difference(&free);
+
+        let fills = plan_layer(&bounds, &occupied, &cfg, true);
+        assert!(
+            !fills.iter().any(|f| f.rect == Rect::new(2200, 1600, 2500, 1900)),
+            "fill at the facing edge survived the layer-level prune: {:?}",
+            fills.iter().map(|f| f.rect).collect::<Vec<_>>()
+        );
     }
 }
 
