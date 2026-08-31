@@ -249,6 +249,27 @@ fn density_fill(args: &[String]) -> ExitCode {
             db.block_get_core_area_y_max(),
         ),
     };
+    // 🔑 CALL SEQUENCE, and it decides which error a user sees. Upstream resolves every layer name
+    // in `loadConfig`, the FIRST thing `DensityFill::fill` does — before `getChip`/`getBlock` and
+    // before any layer is filled. Its Tcl parses `-area` earlier still (FIN 7, FIN 8), so the
+    // precedence is: bad `-rules` -> bad `-area` -> bad layer name -> FIN 10 warns per skipped
+    // layer. This check sits at the matching point: after the area is parsed, before anything
+    // about the block is judged, so a rules file naming a layer that does not exist is reported
+    // even when the core turns out to be empty.
+    let tech_layers = db.layers_with_direction().unwrap_or_default();
+    let have: Vec<&str> = tech_layers.iter().map(|(l, _)| l.as_str()).collect();
+    let missing = unknown_layers(rules.layers.keys().map(String::as_str), &have);
+    if !missing.is_empty() {
+        // ⚠️ Upstream aborts on the FIRST bad name, because `logger_->error` is fatal. We list all
+        // of them: the same outcome, one round trip instead of one per typo. Deliberate.
+        eprintln!(
+            "vyges-fin: {rules_path} names {} the technology does not have: {}",
+            if missing.len() == 1 { "a layer" } else { "layers" },
+            missing.join(", ")
+        );
+        return ExitCode::from(2);
+    }
+
     if bounds.is_empty() {
         eprintln!("vyges-fin: the fill area is empty; nothing to fill");
         return ExitCode::from(1);
@@ -268,7 +289,7 @@ fn density_fill(args: &[String]) -> ExitCode {
     let mut planned: Vec<(String, Fill)> = Vec::new();
     let mut skipped = Vec::new();
 
-    for (layer, direction) in db.layers_with_direction().unwrap_or_default() {
+    for (layer, direction) in tech_layers {
         let Some(cfg) = rules.layers.get(&layer) else {
             skipped.push(layer);
             continue;
@@ -348,6 +369,23 @@ fn density_fill(args: &[String]) -> ExitCode {
         None => println!("{json}"),
     }
     ExitCode::SUCCESS
+}
+
+/// The layers a rules file names that the technology does not have, in the order named.
+///
+/// **Upstream rule, `DensityFill::readAndExpandLayers`:** every layer a rules file names is
+/// resolved with `tech->findLayer` as the file is read, and a name the technology does not have is
+/// a FATAL error — `FIN 1` inside a `names` list, `FIN 2` for a single `name`. Not a warning.
+///
+/// ⚠️ **We resolve names the other way round, and on its own that direction is silent.**
+/// `parse_rules` keeps the names as written — only the caller knows the technology — and the fill
+/// loop then walks the TECHNOLOGY, looking each layer up in the rules. A rule naming a layer that
+/// does not exist is therefore never consulted and never reported: a typo produced no fill on that
+/// layer and a clean exit. `layers_skipped` counts the opposite direction (technology layers the
+/// rules do not mention, upstream's `FIN 10` warn) and does not cover this.
+fn unknown_layers<'a>(named: impl Iterator<Item = &'a str>, have: &[&str]) -> Vec<&'a str> {
+    let have: std::collections::BTreeSet<&str> = have.iter().copied().collect();
+    named.filter(|l| !have.contains(l)).collect()
 }
 
 /// **F4, F10** — the fill for one layer: the non-OPC pass, then the OPC pass over what is left.
@@ -598,6 +636,30 @@ mod tests {
             let clear = f.rect.x1 + 300 <= wire.x0 || wire.x1 + 300 <= f.rect.x0;
             assert!(clear, "fill {:?} is within 300 of the wire", f.rect);
         }
+    }
+
+    #[test]
+    fn a_rule_naming_a_layer_the_technology_lacks_is_reported() {
+        // Upstream errors FIN 2 (or FIN 1 from a `names` list) the moment `tech->findLayer`
+        // returns null. Ours walks the technology instead, so an unmatched RULE is invisible
+        // unless it is checked for -- a typo used to mean no fill on that layer and exit 0.
+        let have = ["met1", "met2", "met3"];
+
+        assert!(unknown_layers(["met1", "met3"].into_iter(), &have).is_empty());
+        assert_eq!(
+            unknown_layers(["met1", "met9", "metal2"].into_iter(), &have),
+            vec!["met9", "metal2"],
+            "every unmatched name is reported, not just the first"
+        );
+        // The `names` expansion lands in the same map, so it is covered by the same check.
+        assert_eq!(
+            unknown_layers(["met2", "MET1"].into_iter(), &have),
+            vec!["MET1"],
+            "layer names are matched exactly, as findLayer does"
+        );
+        // A technology layer the rules do not mention is the OTHER direction: upstream warns
+        // FIN 10 and fills nothing there, which is `layers_skipped`, not an error.
+        assert!(unknown_layers(["met1"].into_iter(), &have).is_empty());
     }
 
     #[test]
