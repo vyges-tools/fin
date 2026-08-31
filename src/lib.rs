@@ -45,10 +45,22 @@ pub struct ShapeCfg {
 /// The rules for one layer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LayerCfg {
+    /// ⛔ **PARSED AND NEVER USED — in the reference too, and that is deliberate.** The reference
+    /// reads `space_to_outline` into its layer config and then refers to it nowhere in the whole
+    /// 533-line file; the top-level `outline` object in the rules file is not read at all either.
+    /// We mirror that exactly.
+    ///
+    /// ⚠️ **Do not "fix" this by honouring it.** Insetting the fill area by this value would
+    /// change every scored design and diverge from the reference on all of them. It stays parsed
+    /// because the reference requires the key to be present — a rules file without it is an error
+    /// there — and it stays unused because using it would be the bug.
     pub space_to_outline: i32,
     /// Masks to cycle through; `<= 1` means the layer is single-mask and no mask is written.
     pub num_masks: u32,
     pub has_opc: bool,
+    /// ⛔ **Parsed and never used, exactly as in the reference** — see [`LayerCfg::space_to_outline`].
+    /// The reference reads `opc.halo` into its config and consults it nowhere. Kept so the two
+    /// configs are read identically; using it would be a divergence, not an improvement.
     pub opc_halo: i32,
     pub opc: ShapeCfg,
     pub non_opc: ShapeCfg,
@@ -338,6 +350,17 @@ pub fn fill_area(
         } else {
             (w0, h0)
         };
+        // ⚠️ **A DELIBERATE DIVERGENCE, and the only one in this function.** The reference has no
+        // such guard: with a zero size its tiling loop advances by `w + space_x`, so a rules file
+        // stating a zero size and a zero spacing never advances it.
+        //
+        // 🔑 **Measured, not assumed.** `width: [0.0]`, `height: [0.0]`, `space_to_fill: 0` on
+        // met2 of gcd: the reference prints "Filling 32 areas with non-OPC fill." and then HANGS
+        // — killed at 45s, exit 124. We report `vacuous` with 0 fills and exit 0, which is the
+        // honest answer: a shape with no area cannot produce a legal fill, and a run that placed
+        // nothing must not say `filled`.
+        //
+        // Unreachable from any rules file that states real sizes.
         if w <= 0 || h <= 0 {
             continue;
         }
