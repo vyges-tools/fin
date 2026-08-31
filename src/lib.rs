@@ -272,10 +272,6 @@ fn point_in_outline(outline: &[vyges_loom::poly90::Point], x: i32, y: i32) -> bo
     inside
 }
 
-/// **F1, F2, F6–F9** — the fill shapes for one area.
-///
-/// `mask_counter` runs across the whole layer, so the mask a shape gets depends on how many were
-/// placed before it anywhere on that layer.
 /// The verdict word for a run that placed `fills` shapes.
 ///
 /// 🔑 **A pass word asserts that work was DONE; if none was, do not say it.** `filled` is what the
@@ -315,13 +311,19 @@ mod settle_status_tests {
     }
 }
 
+/// **F1, F2, F6–F9** — the fill shapes for one area.
+///
+/// 🔑 **F9: mask numbering is LOCAL TO A SUB-AREA.** Upstream declares its counter (`int cnt = 0`)
+/// inside the per-sub-area loop of `fillPolygon`, so it restarts for every piece of every shape
+/// size — it does not run across the layer, across shape sizes, or across the non-OPC/OPC passes.
+/// There is deliberately no counter parameter here: a caller cannot carry one across, because
+/// carrying one across is the bug this signature used to have.
 pub fn fill_area(
     area: &Poly90Set,
     is_horiz: bool,
     cfg: &ShapeCfg,
     num_masks: u32,
     needs_opc: bool,
-    mask_counter: &mut u32,
 ) -> Vec<Fill> {
     let (space_x, space_y) = spacing(is_horiz, cfg);
     let masks = num_masks.max(1);
@@ -375,14 +377,22 @@ pub fn fill_area(
             let whole = Poly90Set::from_rects(&tiles)
                 .intersection(&sub)
                 .keep_sized(w, w, h, h);
-            for r in whole.rects() {
-                // F9: masks cycle; a single-mask layer writes no mask at all.
-                let mask = if masks == 1 {
-                    0
-                } else {
-                    *mask_counter % masks + 1
-                };
-                *mask_counter = mask_counter.wrapping_add(1);
+            // F9: masks cycle, and the count RESTARTS HERE — upstream declares `cnt` inside this
+            // loop, not outside it. Measured against upstream on gcd with `datatype: [0,1,2]`: a
+            // counter carried across sub-areas puts 16,991 of 26,360 fills on a different mask.
+            //
+            // ⚠️ **The ORDER decides the mask, so it is part of the rule.** Upstream numbers the
+            // rectangles in the order boost hands them back, which is Y-MAJOR (ascending y, then
+            // ascending x); our slab decomposition is x-major. Same shapes either way, but a
+            // different mask on each: with the counter fixed and the order left alone, 8,581 of
+            // 26,360 still landed on a different mask than the reference.
+            let mut rects = whole.rects();
+            rects.sort_unstable_by_key(|r| (r.y0, r.x0));
+            let mut cnt: u32 = 0;
+            for r in rects {
+                // A single-mask layer writes no mask at all.
+                let mask = if masks == 1 { 0 } else { cnt % masks + 1 };
+                cnt = cnt.wrapping_add(1);
                 out.push(Fill {
                     rect: r,
                     mask,
@@ -525,16 +535,14 @@ mod tests {
             ..Default::default()
         };
         let area = set(&[(0, 0, 10_000, 10_000)]);
-        let mut c = 0;
-        let horiz = fill_area(&area, true, &cfg, 1, false, &mut c);
+        let horiz = fill_area(&area, true, &cfg, 1, false);
         assert!(
             horiz
                 .iter()
                 .all(|f| f.rect.width() == 400 && f.rect.height() == 100),
             "a horizontal layer lays the shape on its side"
         );
-        let mut c = 0;
-        let vert = fill_area(&area, false, &cfg, 1, false, &mut c);
+        let vert = fill_area(&area, false, &cfg, 1, false);
         assert!(vert
             .iter()
             .all(|f| f.rect.width() == 100 && f.rect.height() == 400));
@@ -551,8 +559,7 @@ mod tests {
         };
         // A deliberately awkward area: not a multiple of any shape, with a notch.
         let area = set(&[(0, 0, 4321, 2345)]).difference(&set(&[(1000, 1000, 1500, 1500)]));
-        let mut c = 0;
-        let fills = fill_area(&area, true, &cfg, 1, false, &mut c);
+        let fills = fill_area(&area, true, &cfg, 1, false);
         assert!(!fills.is_empty(), "an area this size can hold fill");
         for f in &fills {
             let (w, h) = (f.rect.width(), f.rect.height());
@@ -572,8 +579,7 @@ mod tests {
             ..Default::default()
         };
         let area = set(&[(0, 0, 5000, 5000)]).difference(&set(&[(2000, 2000, 3000, 3000)]));
-        let mut c = 0;
-        for f in fill_area(&area, true, &cfg, 1, false, &mut c) {
+        for f in fill_area(&area, true, &cfg, 1, false) {
             let corners = [
                 (f.rect.x0, f.rect.y0),
                 (f.rect.x1 - 1, f.rect.y0),
@@ -598,8 +604,7 @@ mod tests {
             ..Default::default()
         };
         let area = set(&[(0, 0, 6000, 4000)]);
-        let mut c = 0;
-        let fills = fill_area(&area, true, &cfg, 1, false, &mut c);
+        let fills = fill_area(&area, true, &cfg, 1, false);
         assert!(fills.len() > 4, "enough fills to be worth checking");
         for (i, a) in fills.iter().enumerate() {
             for b in &fills[i + 1..] {
@@ -623,10 +628,8 @@ mod tests {
             space_to_fill: 100,
             ..Default::default()
         };
-        let mut c = 0;
-        assert!(fill_area(&set(&[(0, 0, 500, 500)]), true, &cfg, 1, false, &mut c).is_empty());
-        assert!(fill_area(&Poly90Set::new(), true, &cfg, 1, false, &mut c).is_empty());
-        assert_eq!(c, 0, "and nothing was numbered");
+        assert!(fill_area(&set(&[(0, 0, 500, 500)]), true, &cfg, 1, false).is_empty());
+        assert!(fill_area(&Poly90Set::new(), true, &cfg, 1, false).is_empty());
     }
 
     #[test]
@@ -638,20 +641,82 @@ mod tests {
         };
         let area = set(&[(0, 0, 5000, 2000)]);
 
-        let mut c = 0;
-        let single = fill_area(&area, true, &cfg, 1, false, &mut c);
+        let single = fill_area(&area, true, &cfg, 1, false);
         assert!(
             single.iter().all(|f| f.mask == 0),
             "a single-mask layer writes no mask"
         );
 
-        let mut c = 0;
-        let triple = fill_area(&area, true, &cfg, 3, false, &mut c);
+        let triple = fill_area(&area, true, &cfg, 3, false);
         assert!(triple.iter().all(|f| (1..=3).contains(&f.mask)));
         assert_eq!(triple[0].mask, 1);
         assert_eq!(triple[1].mask, 2);
         assert_eq!(triple[2].mask, 3);
         assert_eq!(triple[3].mask, 1, "and it wraps");
+    }
+
+    #[test]
+    fn mask_numbering_restarts_in_every_sub_area() {
+        // Upstream rule, `fillPolygon`: `int cnt = 0` is declared INSIDE the
+        // `for (auto& sub_fill_area : sub_fill_areas)` loop, so the mask counter restarts for
+        // every sub-area of every shape size -- it does not run across the layer.
+        //
+        // Two separated regions, each wide enough for exactly two fills, with three masks. Under
+        // the upstream rule each region is numbered 1, 2 and mask 3 is never reached. A counter
+        // that ran across the layer would number them 1, 2, 3, 1.
+        //
+        // Measured against upstream on gcd with `datatype: [0,1,2]`: a continuous counter puts
+        // 16,991 of 26,360 fills on a different mask, and flattens the distribution
+        // (8788/8787/8785) where upstream's restarts skew it toward mask 1 (8928/8794/8638).
+        let cfg = ShapeCfg {
+            shapes: vec![(500, 500)],
+            space_to_fill: 100,
+            ..Default::default()
+        };
+        let area = set(&[(0, 0, 1100, 500), (5000, 0, 6100, 500)]);
+        let fills = fill_area(&area, true, &cfg, 3, false);
+        assert_eq!(fills.len(), 4, "two fills in each of the two regions");
+
+        let mut left: Vec<u32> = fills.iter().filter(|f| f.rect.x0 < 2000).map(|f| f.mask).collect();
+        let mut right: Vec<u32> = fills.iter().filter(|f| f.rect.x0 >= 2000).map(|f| f.mask).collect();
+        left.sort_unstable();
+        right.sort_unstable();
+        assert_eq!(left, vec![1, 2], "the first region is numbered from 1");
+        assert_eq!(right, vec![1, 2], "and so is the second -- the counter restarts");
+        assert!(
+            !fills.iter().any(|f| f.mask == 3),
+            "mask 3 is only reached by a counter that ran across sub-areas"
+        );
+    }
+
+    #[test]
+    fn masks_are_numbered_in_the_reference_rectangle_order() {
+        // The counter scope alone is not the whole rule: WHICH rectangle gets which mask depends
+        // on the order they are numbered in. Upstream numbers them in the order boost's
+        // `get_rectangles` returns, which is y-major -- ascending y, then ascending x. Our slab
+        // decomposition is x-major, which gives the same shapes different masks.
+        //
+        // One sub-area holding a 2x2 block of fills, three masks. Y-major numbers the bottom row
+        // first: (0,0)=1, (600,0)=2, then the top row (0,600)=3, (600,600)=1. X-major would give
+        // (0,600) mask 2 and (600,0) mask 3 -- the two swap.
+        let cfg = ShapeCfg {
+            shapes: vec![(500, 500)],
+            space_to_fill: 100,
+            ..Default::default()
+        };
+        let fills = fill_area(&set(&[(0, 0, 1100, 1100)]), true, &cfg, 3, false);
+        assert_eq!(fills.len(), 4);
+        let mask_at = |x: i32, y: i32| {
+            fills
+                .iter()
+                .find(|f| f.rect.x0 == x && f.rect.y0 == y)
+                .unwrap_or_else(|| panic!("no fill at ({x}, {y})"))
+                .mask
+        };
+        assert_eq!(mask_at(0, 0), 1);
+        assert_eq!(mask_at(600, 0), 2, "the bottom ROW is numbered before the next row up");
+        assert_eq!(mask_at(0, 600), 3);
+        assert_eq!(mask_at(600, 600), 1, "and it wraps");
     }
 
     #[test]
@@ -671,9 +736,8 @@ mod tests {
         // big region are mostly narrower than the next size down, so a single region would not
         // show the effect — the sizes are for differently-sized gaps, not for packing one gap.)
         let area = set(&[(0, 0, 3400, 3400), (4000, 0, 4500, 500)]);
-        let (mut c1, mut c2) = (0, 0);
-        let a = fill_area(&area, true, &big_only, 1, false, &mut c1);
-        let b = fill_area(&area, true, &both, 1, false, &mut c2);
+        let a = fill_area(&area, true, &big_only, 1, false);
+        let b = fill_area(&area, true, &both, 1, false);
 
         let covered = |f: &[Fill]| -> i64 {
             f.iter()

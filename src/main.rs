@@ -70,14 +70,15 @@ const DESCRIBE: &str = r#"{
   "provenance_limitations": [
       "input_hash covers the argument vector, not the content of the .odb or the rules file it names.",
       "status is one of filled, planned, vacuous or error. VACUOUS IS NOT FILLED: it means the run placed no shape at all, and the declared assertion passes only on filled, so a no-op fails it rather than reporting a fill that did not happen. Zero can still be the right answer -- a design already above every density floor needs no fill -- so read fills and layers_filled and decide. A dry run reports planned, which never claimed to have filled anything.",
-      "Validated against OpenROAD density fill at a pinned commit across five designs covering a power grid, a macro, a non-rectangular core and a restricted --area: every fill shape matches in layer, mask, OPC flag and coordinates.",
+      "Validated against OpenROAD density fill at a pinned commit across six cases covering a power grid, a macro, a non-rectangular core, a restricted --area and a multi-mask rules file: every fill shape matches in layer, mask, OPC flag and coordinates.",
       "Also checked against invariants that need no reference: every fill is a whole shape of a size the rules declare, and no two fills on a layer overlap. Those hold of any correct fill.",
       "Existing fill is CLEARED before filling: fill is regenerated wholesale, never patched, so re-running is idempotent rather than cumulative.",
       "Non-fill area is the union, per layer, of every placed instance's shapes, every net's routed wire boxes (vias decomposed), and every obstruction. A layer the rules do not mention is skipped and reported.",
       "The tiling is a fixed grid anchored at each sub-area's bounding box. Upstream notes KLayout sweeps the tile origin looking for maximum fill and does not do so; neither does this, so fill density is not maximal by construction.",
       "prune() is conservative: it forbids fill near two regions that are closer than the fill spacing, which may exclude a position that would in fact have been legal.",
       "OPC fill is placed only where the rules state an `opc` section, and only after non-OPC fill, clearing both the design and the fill just placed.",
-      "Correlated at pin @OPENROAD_PIN@: 5 of 5 designs reproduce OpenROAD density fill exactly, fill for fill (26360, 7518, 25095, 12437, 758 shapes). Re-measured there on 2026-08-23 and identical to the previous pin @OPENROAD_PIN@, so this engine carried the re-pin with zero movement -- measured, not assumed. Only one case has an upstream golden; the other four are ours, scored against an oracle run at our own pin. The algorithm is reimplemented from the published behaviour, not transliterated."
+      "Correlated at pin @OPENROAD_PIN@: 6 of 6 cases reproduce OpenROAD density fill exactly, fill for fill (26360, 7518, 25095, 12437, 758, 26360 shapes). Only one case has an upstream golden; the rest are ours, scored against an oracle run at our own pin. The algorithm is reimplemented from the published behaviour, not transliterated.",
+      "MASK NUMBERING is scored, and nothing upstream reaches it: every shipped rules file states datatype as a bare number, which makes num_masks 1 and writes mask 0 on every fill. The sixth case states datatype as a list of three, which is the only thing that turns the path on. Mask assignment restarts in each sub-area and numbers rectangles y-major, matching the reference exactly; both were wrong before that case existed, on identical geometry."
   ],
   "invocation": {
     "args_template": ["density-fill", "{odb}"],
@@ -395,8 +396,6 @@ fn plan_layer(
     cfg: &LayerCfg,
     is_horiz: bool,
 ) -> Vec<Fill> {
-    let mut mask_counter = 0u32;
-
     // F4: the area is the bounds minus the design, bloated by the fill-to-design spacing.
     let s = cfg.non_opc.space_to_non_fill;
     // F5, at the LAYER level. Upstream's `fillLayer` prunes the whole fill area here, before it
@@ -413,7 +412,6 @@ fn plan_layer(
         &cfg.non_opc,
         cfg.num_masks,
         false,
-        &mut mask_counter,
     );
 
     if cfg.has_opc {
@@ -437,7 +435,6 @@ fn plan_layer(
             &cfg.opc,
             cfg.num_masks,
             true,
-            &mut mask_counter,
         ));
     }
     out
