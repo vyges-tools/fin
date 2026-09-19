@@ -154,8 +154,8 @@ fn parse_opts(args: &[String]) -> Result<Opts, String> {
 
 /// Everything already occupying a layer: the design's own metal, which fill must not touch.
 ///
-/// Instance shapes, routed wires and obstructions are all needed — miss one and fill lands on top
-/// of it. Collected once for every layer in a single pass, because each source is a whole-database
+/// Instance shapes, routed wires and `+ FILLS` obstructions are all needed — miss one and fill
+/// lands on top of it. Routing obstructions are deliberately NOT included; see the loop below. Collected once for every layer in a single pass, because each source is a whole-database
 /// walk and doing it per layer would repeat that walk for every layer in the stack.
 fn non_fill_by_layer(db: &Db) -> std::collections::BTreeMap<i64, Vec<Rect>> {
     let mut by_layer: std::collections::BTreeMap<i64, Vec<Rect>> = Default::default();
@@ -171,7 +171,14 @@ fn non_fill_by_layer(db: &Db) -> std::collections::BTreeMap<i64, Vec<Rect>> {
     for (layer, x0, y0, x1, y1) in db.inst_shapes().unwrap_or_default() {
         add(layer, x0, y0, x1, y1);
     }
-    for (layer, x0, y0, x1, y1) in db.obstruction_boxes().unwrap_or_default() {
+    // ONLY obstructions marked `+ FILLS` in DEF. Upstream rule -- OpenROAD
+    // src/fin/src/DensityFill.cpp, orNonFills(), PR #11380 closing our issue #11285:
+    //     if (obstruction->isFillObstruction() && box->getTechLayer() == layer)
+    // A plain routing obstruction does NOT exclude fill: it constrains the router, metal fill
+    // is not routed, and upstream deliberately fills inside it. We previously excluded EVERY
+    // obstruction, which matched neither upstream before the fix (which excluded none) nor
+    // after it, and under-filled any design carrying a routing obstruction.
+    for (layer, x0, y0, x1, y1) in db.fill_obstruction_boxes().unwrap_or_default() {
         add(layer, x0, y0, x1, y1);
     }
     // The power grid. A separate collection from routed signal wires, and missing it means
