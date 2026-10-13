@@ -24,18 +24,18 @@ jobs:
     steps:
       # Sibling layout so every `[patch]` path entry in Cargo.toml resolves. A patch whose path
       # does not exist is a hard `failed to load source`, not a fall-back to the git source.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: vyges-tools-fin
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: vyges-tools/opendb
           path: vyges-tools-opendb
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: vyges-tools/opendb-lib
           path: vyges-tools-opendb-lib
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: vyges-tools/loom
           path: vyges-tools-loom
