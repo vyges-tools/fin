@@ -8,6 +8,27 @@ use vyges_fin::{fill_area, parse_rules, prune, spacing, Fill, LayerCfg};
 use vyges_loom::poly90::{Poly90Set, Rect};
 use vyges_opendb::Db;
 
+/// A diagnostic as a structured event (`FIN-ERROR`, or `FIN-WARNING` for a warning; `vyges-events/1.0`)
+/// instead of a bare stderr line; text after a blank line (the usage) stays plain help.
+fn diag_line(msg: String) {
+    let (head, help) = match msg.split_once("\n\n") {
+        Some((h, rest)) => (h.to_string(), Some(rest.to_string())),
+        None => (msg, None),
+    };
+    let warn = false;
+    let text = head.strip_prefix("vyges-fin: ").unwrap_or(&head).to_string();
+    let (severity, code) = if warn { (vyges_events::Severity::Warn, "FIN-WARNING") } else { (vyges_events::Severity::Error, "FIN-ERROR") };
+    vyges_events::emit(&vyges_events::Event::new("vyges-fin", severity, text).with_code(code));
+    if let Some(h) = help {
+        eprintln!("{h}");
+    }
+}
+
+macro_rules! diag {
+    ($($t:tt)*) => { diag_line(format!($($t)*)) };
+}
+
+
 // ⚠️ The prefix here is the CLI GROUP this engine belongs to, and vyges-cli's MODULES
 // registry is what actually decides it (`group: "physical"`). It read `vyges loom fin`
 // for a release after the construction engines were split out of the loom suite, because
@@ -200,18 +221,18 @@ fn density_fill(args: &[String]) -> ExitCode {
     let opts = match parse_opts(args) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("vyges-fin: {e}\n\n{USAGE}");
+            diag!("vyges-fin: {e}\n\n{USAGE}");
             return ExitCode::from(2);
         }
     };
     let Some(rules_path) = opts.get("rules") else {
-        eprintln!("vyges-fin: `density-fill` needs --rules FILE\n\n{USAGE}");
+        diag!("vyges-fin: `density-fill` needs --rules FILE\n\n{USAGE}");
         return ExitCode::from(2);
     };
     let rules_text = match std::fs::read_to_string(rules_path) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("vyges-fin: cannot read {rules_path}: {e}");
+            diag!("vyges-fin: cannot read {rules_path}: {e}");
             return ExitCode::from(2);
         }
     };
@@ -219,19 +240,19 @@ fn density_fill(args: &[String]) -> ExitCode {
     let mut db = match Db::open(&opts.odb) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("vyges-fin: cannot read {}: {e}", opts.odb);
+            diag!("vyges-fin: cannot read {}: {e}", opts.odb);
             return ExitCode::from(2);
         }
     };
     let dbu = db.dbu_per_micron();
     if dbu <= 0 {
-        eprintln!("vyges-fin: no DBU scale");
+        diag!("vyges-fin: no DBU scale");
         return ExitCode::from(2);
     }
     let rules = match parse_rules(&rules_text, dbu) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("vyges-fin: {rules_path}: {e}");
+            diag!("vyges-fin: {rules_path}: {e}");
             return ExitCode::from(2);
         }
     };
@@ -244,7 +265,7 @@ fn density_fill(args: &[String]) -> ExitCode {
                 .filter_map(|t| t.parse().ok())
                 .collect();
             if n.len() != 4 {
-                eprintln!("vyges-fin: --area wants 'lx ly ux uy' in microns, got `{a}`");
+                diag!("vyges-fin: --area wants 'lx ly ux uy' in microns, got `{a}`");
                 return ExitCode::from(2);
             }
             let d = |v: f64| (v * dbu as f64).round() as i32;
@@ -270,7 +291,7 @@ fn density_fill(args: &[String]) -> ExitCode {
     if !missing.is_empty() {
         // ⚠️ Upstream aborts on the FIRST bad name, because `logger_->error` is fatal. We list all
         // of them: the same outcome, one round trip instead of one per typo. Deliberate.
-        eprintln!(
+        diag!(
             "vyges-fin: {rules_path} names {} the technology does not have: {}",
             if missing.len() == 1 { "a layer" } else { "layers" },
             missing.join(", ")
@@ -279,7 +300,7 @@ fn density_fill(args: &[String]) -> ExitCode {
     }
 
     if bounds.is_empty() {
-        eprintln!("vyges-fin: the fill area is empty; nothing to fill");
+        diag!("vyges-fin: the fill area is empty; nothing to fill");
         return ExitCode::from(1);
     }
 
@@ -287,7 +308,7 @@ fn density_fill(args: &[String]) -> ExitCode {
     // cumulative. Clearing first is what makes that true.
     if !opts.dry_run {
         if let Err(e) = db.clear_fills() {
-            eprintln!("vyges-fin: cannot clear existing fill: {e}");
+            diag!("vyges-fin: cannot clear existing fill: {e}");
             return ExitCode::from(2);
         }
     }
@@ -326,7 +347,7 @@ fn density_fill(args: &[String]) -> ExitCode {
                 f.rect.x1,
                 f.rect.y1,
             ) {
-                eprintln!("vyges-fin: cannot create fill on {layer}: {e}");
+                diag!("vyges-fin: cannot create fill on {layer}: {e}");
                 return ExitCode::from(2);
             }
             created += 1;
@@ -339,14 +360,14 @@ fn density_fill(args: &[String]) -> ExitCode {
     if !opts.dry_run {
         let out = opts.get("out-odb").unwrap_or(&opts.odb).to_string();
         if let Err(e) = db.write(&out) {
-            eprintln!("vyges-fin: cannot write {out}: {e}");
+            diag!("vyges-fin: cannot write {out}: {e}");
             return ExitCode::from(2);
         }
         written = Some(out);
     }
     if let Some(def) = opts.get("out-def") {
         if let Err(e) = db.write_def(def) {
-            eprintln!("vyges-fin: cannot write {def}: {e}");
+            diag!("vyges-fin: cannot write {def}: {e}");
             return ExitCode::from(2);
         }
     }
@@ -370,7 +391,7 @@ fn density_fill(args: &[String]) -> ExitCode {
     match opts.get("o") {
         Some(f) => {
             if let Err(e) = std::fs::write(f, format!("{json}\n")) {
-                eprintln!("vyges-fin: cannot write {f}: {e}");
+                diag!("vyges-fin: cannot write {f}: {e}");
                 return ExitCode::from(2);
             }
         }
@@ -532,7 +553,7 @@ fn main() -> ExitCode {
     match args[0].as_str() {
         "density-fill" => density_fill(&args[1..]),
         other => {
-            eprintln!("vyges-fin: unknown command `{other}`\n\n{USAGE}");
+            diag!("vyges-fin: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(2)
         }
     }
