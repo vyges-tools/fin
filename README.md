@@ -9,7 +9,7 @@ vyges physical fin density-fill design.odb --rules fill.json
 
 ## Correctness
 
-Validated against OpenROAD's density fill at a pinned commit, across five designs chosen for the
+Validated against the reference density fill at a pinned commit, across five designs chosen for the
 geometry they exercise — a power grid, a macro, a non-rectangular core, a near-empty floorplan, and
 a restricted `--area`. Every fill shape matches in layer, mask, OPC flag and coordinates.
 
@@ -46,7 +46,7 @@ idempotent rather than cumulative.
 
 ## What it does not do
 
-- **The tiling is a fixed grid** anchored at each piece's bounding box. Upstream notes that KLayout
+- **The tiling is a fixed grid** anchored at each piece's bounding box. The reference notes that KLayout
   sweeps the tile origin looking for maximum fill and does not do so; neither does this. **Fill
   density is not maximal by construction.**
 - `prune` is conservative: it forbids fill where two regions are closer than the fill spacing, which
