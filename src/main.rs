@@ -318,8 +318,11 @@ fn density_fill(args: &[String]) -> ExitCode {
     let mut planned: Vec<(String, Fill)> = Vec::new();
     let mut skipped = Vec::new();
 
+    // `DensityFill::fill`: the technology's layers in order, each skipped (FIN-10) or filled with
+    // its lines as it goes.
     for (layer, direction) in tech_layers {
         let Some(cfg) = rules.layers.get(&layer) else {
+            log_line((true, 10, format!("Skipping layer {layer}.")));
             skipped.push(layer);
             continue;
         };
@@ -328,11 +331,11 @@ fn density_fill(args: &[String]) -> ExitCode {
         let occupied =
             Poly90Set::from_rects(non_fill.get(&number).map(|v| v.as_slice()).unwrap_or(&[]));
 
-        planned.extend(
-            plan_layer(&bounds_set, &occupied, cfg, is_horiz)
-                .into_iter()
-                .map(|f| (layer.clone(), f)),
-        );
+        let (fills, counts) = plan_layer_counted(&bounds_set, &occupied, cfg, is_horiz);
+        for line in layer_lines(&layer, counts, planned.len(), fills.len()) {
+            log_line(line);
+        }
+        planned.extend(fills.into_iter().map(|f| (layer.clone(), f)));
     }
 
     let mut created = 0usize;
@@ -354,7 +357,7 @@ fn density_fill(args: &[String]) -> ExitCode {
         }
     }
 
-    emit_events(&planned, &skipped, created, !opts.dry_run);
+    emit_events(&planned, created, !opts.dry_run);
 
     let mut written = None;
     if !opts.dry_run {
@@ -418,12 +421,51 @@ fn unknown_layers<'a>(named: impl Iterator<Item = &'a str>, have: &[&str]) -> Ve
 }
 
 /// **F4, F10** — the fill for one layer: the non-OPC pass, then the OPC pass over what is left.
+#[cfg(test)]
 fn plan_layer(
     bounds: &Poly90Set,
     occupied: &Poly90Set,
     cfg: &LayerCfg,
     is_horiz: bool,
 ) -> Vec<Fill> {
+    plan_layer_counted(bounds, occupied, cfg, is_horiz).0
+}
+
+/// What one layer's fill reports: the areas each pass fills (the pruned area's polygons, holes
+/// kept with their outline) and how many fills the non-OPC pass made.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LayerCounts {
+    non_opc_areas: usize,
+    non_opc_fills: usize,
+    /// `None` when the layer has no OPC pass.
+    opc_areas: Option<usize>,
+}
+
+/// `fillLayer`'s lines for one layer, given the fills the block held before it.
+///
+/// Rules: the layer, the non-OPC areas, then the block's running TOTAL of fills (every layer so
+/// far, not this one's); with an OPC pass, its areas and the total again.
+fn layer_lines(layer: &str, n: LayerCounts, before: usize, all: usize) -> Vec<(bool, u16, String)> {
+    let mut out = vec![
+        (false, 3, format!("Filling layer {layer}.")),
+        (false, 9, format!("Filling {} areas with non-OPC fill.", n.non_opc_areas)),
+        (false, 4, format!("Total fills: {}.", before + n.non_opc_fills)),
+    ];
+    if let Some(a) = n.opc_areas {
+        out.push((false, 5, format!("Filling {a} areas with OPC fill.")));
+        out.push((false, 6, format!("Total fills: {}.", before + all)));
+    }
+    out
+}
+
+/// `plan_layer`, with the counts its lines report.
+fn plan_layer_counted(
+    bounds: &Poly90Set,
+    occupied: &Poly90Set,
+    cfg: &LayerCfg,
+    is_horiz: bool,
+) -> (Vec<Fill>, LayerCounts) {
+    let mut counts = LayerCounts::default();
     // F4: the area is the bounds minus the design, bloated by the fill-to-design spacing.
     let s = cfg.non_opc.space_to_non_fill;
     // F5, at the LAYER level. Upstream's `fillLayer` prunes the whole fill area here, before it
@@ -434,6 +476,7 @@ fn plan_layer(
     // fill a sub-spacing distance from a neighbouring region — see the test below.
     let (sx, sy) = spacing(is_horiz, &cfg.non_opc);
     let area = prune(&bounds.difference(&occupied.bloat(s, s, s, s)), sx, sy);
+    counts.non_opc_areas = area.polygons().len();
     let mut out = fill_area(
         &area,
         is_horiz,
@@ -441,6 +484,7 @@ fn plan_layer(
         cfg.num_masks,
         false,
     );
+    counts.non_opc_fills = out.len();
 
     if cfg.has_opc {
         // F10: OPC fill must clear the design AND the fill just placed.
@@ -457,6 +501,7 @@ fn plan_layer(
             osx,
             osy,
         );
+        counts.opc_areas = Some(opc_area.polygons().len());
         out.extend(fill_area(
             &opc_area,
             is_horiz,
@@ -465,47 +510,33 @@ fn plan_layer(
             true,
         ));
     }
-    out
+    (out, counts)
 }
 
-fn emit_events(planned: &[(String, Fill)], skipped: &[String], created: usize, applied: bool) {
+/// Write one run line (`[INFO FIN-nnnn] text`) through the suite logger: on stderr as it is
+/// logged, and an event under its code.
+fn log_line((warning, id, text): (bool, u16, String)) {
+    use std::sync::{Mutex, OnceLock};
+    static LOG: OnceLock<Mutex<vyges_events::logger::Logger>> = OnceLock::new();
+    let mut log = LOG
+        .get_or_init(|| Mutex::new(vyges_events::logger::Logger::new().events("vyges-fin")))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if warning {
+        log.warn("FIN", id, text);
+    } else {
+        log.info("FIN", id, text);
+    }
+    for l in log.take_lines() {
+        eprintln!("{l}");
+    }
+}
+
+fn emit_events(planned: &[(String, Fill)], created: usize, applied: bool) {
     use vyges_events::{Event, Severity};
     let mut per_layer: std::collections::BTreeMap<&str, usize> = Default::default();
     for (l, _) in planned {
         *per_layer.entry(l.as_str()).or_default() += 1;
-    }
-    for (layer, n) in &per_layer {
-        vyges_events::emit(
-            &Event::new(
-                "vyges-fin",
-                Severity::Info,
-                format!("FIN-0003 Filling layer {layer}."),
-            )
-            .with_code("FIN-LAYER")
-            .with_objects(vec![format!("layer:{layer}")]),
-        );
-        vyges_events::emit(
-            &Event::new(
-                "vyges-fin",
-                Severity::Info,
-                format!("FIN-0004 Total fills: {n}."),
-            )
-            .with_code("FIN-LAYER-TOTAL")
-            .with_objects(vec![format!("layer:{layer}")]),
-        );
-    }
-    for layer in skipped {
-        // Upstream's FIN-10. A layer the rules do not mention gets no fill, and saying so is the
-        // difference between "no rule" and "nothing to fill".
-        vyges_events::emit(
-            &Event::new(
-                "vyges-fin",
-                Severity::Warn,
-                format!("FIN-0010 Skipping layer {layer}."),
-            )
-            .with_code("FIN-LAYER-SKIPPED")
-            .with_objects(vec![format!("layer:{layer}")]),
-        );
     }
     vyges_events::emit(
         &Event::new(
@@ -641,6 +672,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Rules (fillLayer): the area counts are the pruned areas' polygons — a hole stays inside its
+    /// outline, so a ring is ONE area; "Total fills" is the block's running total across layers;
+    /// the OPC pair only when the layer has an OPC pass.
+    #[test]
+    fn layer_lines_count_areas_and_the_running_total() {
+        let cfg = LayerCfg {
+            non_opc: vyges_fin::ShapeCfg { shapes: vec![(1000, 1000)], space_to_fill: 100, space_to_non_fill: 0, space_line_end: 0 },
+            ..Default::default()
+        };
+        // A ring: the bounds less a block in the middle.
+        let bounds = Poly90Set::from_rects(&[Rect::new(0, 0, 9000, 9000)]);
+        let block = Poly90Set::from_rects(&[Rect::new(3000, 3000, 6000, 6000)]);
+        let (fills, n) = plan_layer_counted(&bounds, &block, &cfg, true);
+        assert_eq!(n.non_opc_areas, 1, "a ring is one area");
+        assert_eq!(n.non_opc_fills, fills.len());
+        assert_eq!(n.opc_areas, None);
+        let lines = layer_lines("met2", n, 7, fills.len());
+        let text: Vec<String> = lines.iter().map(|(w, i, t)| format!("{w} {i} {t}")).collect();
+        assert_eq!(text, [
+            "false 3 Filling layer met2.".to_string(),
+            "false 9 Filling 1 areas with non-OPC fill.".to_string(),
+            format!("false 4 Total fills: {}.", 7 + fills.len()),
+        ]);
+        let opc = LayerCounts { non_opc_areas: 2, non_opc_fills: 5, opc_areas: Some(3) };
+        let tail: Vec<String> = layer_lines("met3", opc, 10, 9)[2..].iter().map(|(_, i, t)| format!("{i} {t}")).collect();
+        assert_eq!(tail, ["4 Total fills: 15.", "5 Filling 3 areas with OPC fill.", "6 Total fills: 19."]);
     }
 
     #[test]
