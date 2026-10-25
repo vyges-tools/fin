@@ -19,6 +19,10 @@
 //! spacing is respected, every shape is whole and a declared size — rather than on reproducing a
 //! single reference file.
 
+// The crate's own name inside it: the command-line entry ([`cli_main`]) is built into the
+// library too, and its `vyges_fin::…` paths resolve here.
+extern crate self as vyges_fin;
+
 /// This crate's version, as Cargo knows it — the single number the whole suite is released on.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -797,3 +801,10 @@ mod tests {
         );
     }
 }
+
+/// The `vyges-fin` command-line entry (the binary's `main`), built into the library too so a
+/// suite binary can link every engine and run the one it is invoked as.
+#[cfg(feature = "suite")]
+#[doc(hidden)]
+#[path = "main.rs"]
+pub mod cli_main;
