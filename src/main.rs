@@ -102,10 +102,12 @@ const DESCRIBE: &str = r#"{
       "MASK NUMBERING is scored, and nothing in the reference suite reaches it: every shipped rules file states datatype as a bare number, which makes num_masks 1 and writes mask 0 on every fill. The sixth case states datatype as a list of three, which is the only thing that turns the path on. Mask assignment restarts in each sub-area and numbers rectangles y-major, matching the reference exactly; both were wrong before that case existed, on identical geometry."
   ],
   "invocation": {
-    "args_template": ["density-fill", "{odb}"],
+    "args_template": ["density-fill", "{odb}", "--rules", "{rules}"],
     "optional": [
+      { "arg": "area", "flag": "--area" },
       { "arg": "out", "flag": "-o" },
-      { "arg": "out_odb", "flag": "--out-odb" }
+      { "arg": "out_odb", "flag": "--out-odb" },
+      { "arg": "out_def", "flag": "--out-def" }
     ],
     "emits_json": true
   },
@@ -114,9 +116,10 @@ const DESCRIBE: &str = r#"{
     "required": ["odb", "rules"],
     "properties": {
       "odb": { "type": "string", "description": "path to the design database (.odb)" },
-      "rules": { "type": "string", "description": "path to the JSON fill rules" },
+      "rules": { "type": ["string", "object"], "description": "the per-layer fill rules: a path to the JSON file, or the rules object itself" },
       "area": { "type": "string", "description": "fill rectangle in microns, 'lx ly ux uy'" },
       "out_odb": { "type": "string", "description": "write the database here instead of in place" },
+      "out_def": { "type": "string", "description": "also write the result as DEF" },
       "out": { "type": "string", "description": "write the report to FILE instead of stdout" }
     }
   },
@@ -816,6 +819,44 @@ mod pin_tests {
                 tok.len() < 40,
                 "{tok} looks like a hardcoded commit -- use the {PIN_TOKEN} placeholder"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod descriptor_args_tests {
+    use super::DESCRIBE;
+    /// Every advertised input reaches the command line, and every command-line token is
+    /// advertised -- for the main operation and each `tools[]` entry. `vyges mcp` builds the
+    /// argv from these and refuses an argument the template would drop; 0.1.51 shipped inputs
+    /// that never arrived (ifp's die area, ppl's layers, fin's rules).
+    #[test]
+    fn every_advertised_input_reaches_the_command_line() {
+        use std::collections::BTreeSet;
+        let d: serde_json::Value = serde_json::from_str(DESCRIBE).expect("descriptor is valid JSON");
+        let mut ops = vec![d.clone()];
+        ops.extend(d["tools"].as_array().cloned().unwrap_or_default());
+        for op in &ops {
+            let inv = &op["invocation"];
+            let mut used: BTreeSet<String> = inv["args_template"]
+                .as_array()
+                .expect("an args_template")
+                .iter()
+                .filter_map(|t| t.as_str())
+                .filter(|t| t.starts_with('{') && t.ends_with('}'))
+                .map(|t| t[1..t.len() - 1].to_string())
+                .collect();
+            if let Some(o) = inv.get("optional") {
+                let o = o.as_array().expect("invocation.optional is an array of {arg, flag}");
+                used.extend(o.iter().map(|x| x["arg"].as_str().expect("an arg").to_string()));
+            }
+            let props: BTreeSet<String> = op["inputs"]["properties"]
+                .as_object()
+                .expect("inputs.properties")
+                .keys()
+                .cloned()
+                .collect();
+            assert_eq!(used, props, "{}: command line vs advertised inputs", op["name"]);
         }
     }
 }
