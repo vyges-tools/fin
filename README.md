@@ -1,5 +1,7 @@
 # vyges-fin
 
+**[Download Loom](https://vyges.com/products/vyges-cli/#install)** · install the free [Vyges CLI](https://vyges.com/products/vyges-cli/), then `vyges install physical`
+
 Density fill over the OpenDB design database: metal shapes placed in the gaps between real routing,
 so each layer meets the foundry's minimum metal density.
 
