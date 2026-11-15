@@ -53,4 +53,9 @@ jobs:
       - name: Build
         run: cargo build --release --verbose
       - name: Test
+        # Tests only: LTO and codegen units cannot change a result (language rule), so a test
+        # binary built without them tests the same code; release builds keep [profile.release].
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: cargo test --release --verbose
